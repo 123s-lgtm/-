@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>今天吃啥大转盘</title>
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { 
+            margin: 0; padding: 0; background-color: #FFF5E1; 
+            font-family: 'PingFang SC', 'Helvetica Neue', Helvetica, Arial, sans-serif; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center; 
+            height: 100vh; overflow: hidden;
+        }
+        .header-title { font-size: 28px; font-weight: bold; color: #FF6B6B; margin-bottom: 40px; letter-spacing: 2px;}
+        
+        .roulette-wrapper { position: relative; width: 300px; height: 300px; }
+        
+        /* 指针 */
+        .pointer { 
+            position: absolute; top: -20px; left: 50%; transform: translateX(-50%); 
+            width: 0; height: 0; 
+            border-left: 20px solid transparent; border-right: 20px solid transparent; border-top: 35px solid #FF4757; 
+            z-index: 10; filter: drop-shadow(0 3px 3px rgba(0,0,0,0.2));
+        }
+        
+        /* 转盘画布 */
+        canvas { 
+            transition: transform 4s cubic-bezier(0.25, 0.1, 0.25, 1); /* 物理惯性减速缓动 */
+            border-radius: 50%; 
+            box-shadow: 0 8px 20px rgba(255, 107, 107, 0.2); 
+            background-color: white;
+            border: 4px solid #FF8E8B;
+        }
+        
+        /* 中间开始按钮 */
+        .start-btn { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            width: 76px; height: 76px; border-radius: 50%; 
+            background: linear-gradient(135deg, #FF6B6B, #FF4757); 
+            color: white; font-size: 24px; font-weight: bold; 
+            border: 4px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); 
+            cursor: pointer; display: flex; align-items: center; justify-content: center; 
+            z-index: 5; transition: transform 0.1s;
+        }
+        .start-btn:active { transform: translate(-50%, -46%); box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+
+        /* 弹窗样式 */
+        .modal-overlay { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(3px);
+            display: none; align-items: center; justify-content: center; 
+            z-index: 100; opacity: 0; transition: opacity 0.3s ease; 
+        }
+        .modal-content { 
+            background: white; padding: 20px; border-radius: 20px; text-align: center; 
+            transform: scale(0.5); transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+            width: 280px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .modal-overlay.show { display: flex; opacity: 1; }
+        .modal-overlay.show .modal-content { transform: scale(1); }
+        
+        .food-img { 
+            width: 100%; height: 200px; object-fit: cover; /* 保证图片不变形 */
+            border-radius: 12px; margin-bottom: 15px; background-color: #f0f0f0; 
+        }
+        .food-name { font-size: 22px; font-weight: bold; color: #333; margin-bottom: 20px; }
+        .close-btn { 
+            background: #FF4757; color: white; border: none; padding: 12px 0; 
+            border-radius: 25px; font-size: 16px; font-weight: bold; 
+            cursor: pointer; width: 100%; transition: background 0.2s;
+        }
+        .close-btn:active { background: #E03E4D; }
+    </style>
+</head>
+<body>
+
+    <div class="header-title">今天吃啥？</div>
+
+    <div class="roulette-wrapper">
+        <div class="pointer"></div>
+        <!-- 转盘大小设置在这里 -->
+        <canvas id="roulette" width="300" height="300"></canvas>
+        <div class="start-btn" id="start-btn">抽!</div>
+    </div>
+
+    <!-- 结果弹窗 -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal-content">
+            <img src="" alt="美食图片" class="food-img" id="result-img">
+            <div class="food-name" id="result-name">决定就是你了！</div>
+            <button class="close-btn" id="close-btn">知道啦 / 再抽一次</button>
+        </div>
+    </div>
+
+    <script>
+     // 1. 数据配置区：在这里修改你的菜品和图片路径
+        const foodList = [
+            { name: '辣椒炒肉', image: './images/1.jpg' },
+            { name: '武汉热干面', image: './images/2.jpg' },
+            { name: '盖浇滑蛋饭', image: './images/3.jpg' }
+        ];
+
+        // 预设转盘扇形颜色（暖色调，按顺序循环使用）
+        const colors = ['#FFD1DC', '#FFB347', '#FDFD96', '#AEC6CF', '#B39EB5', '#77DD77'];
+
+        // 获取 DOM 元素
+        const canvas = document.getElementById('roulette');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('start-btn');
+        const modal = document.getElementById('modal');
+        const resultImg = document.getElementById('result-img');
+        const resultName = document.getElementById('result-name');
+        const closeBtn = document.getElementById('close-btn');
+
+        let currentRotation = 0; // 记录当前转盘的角度
+        let isSpinning = false;  // 防止重复点击
+
+        // 2. 绘制转盘函数
+        function drawRoulette() {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = centerX;
+            const sliceAngle = (2 * Math.PI) / foodList.length; // 动态计算每个扇形的角度
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            foodList.forEach((item, i) => {
+                // 我们从 -90度（正上方）开始绘制
+                const startAngle = i * sliceAngle - Math.PI / 2;
+                const endAngle = startAngle + sliceAngle;
+
+                // 画扇形
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                ctx.fillStyle = colors[i % colors.length];
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#fff'; // 扇形之间的白边
+                ctx.stroke();
+
+                // 写文字
+                ctx.save();
+                ctx.translate(centerX, centerY);
+                ctx.rotate(startAngle + sliceAngle / 2); // 旋转到扇形的中心线
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 18px sans-serif';
+                ctx.fillText(item.name, radius - 25, 0); // 文字靠边缘显示
+                ctx.restore();
+            });
+        }
+
+        // 初始化绘制
+        drawRoulette();
+
+        // 3. 抽奖逻辑
+        startBtn.addEventListener('click', () => {
+            if (isSpinning) return;
+            isSpinning = true;
+
+            // 随机决定中奖的菜品索引
+            const winIndex = Math.floor(Math.random() * foodList.length);
+            
+            // 计算需要旋转的角度
+            const sliceAngleDeg = 360 / foodList.length;
+            // 随机在扇形内部的一个偏移量，避免每次都停在扇形正中间
+            const offset = (Math.random() * 0.8 - 0.4) * sliceAngleDeg; 
+            
+            // 核心计算：确保指针（正上方）最终指向 winIndex 对应的扇形
+            const currentMod = currentRotation % 360;
+            const targetMod = 360 - (winIndex + 0.5) * sliceAngleDeg + offset;
+            
+            let rotationDiff = targetMod - currentMod;
+            if (rotationDiff < 0) rotationDiff += 360;
+            
+            // 基础旋转圈数（5圈）+ 目标角度差
+            const totalRotation = currentRotation + rotationDiff + 360 * 5; 
+            currentRotation = totalRotation;
+
+            // 执行 CSS 旋转动画
+            canvas.style.transform = `rotate(${currentRotation}deg)`;
+
+            // 等待 4 秒动画结束后弹出结果
+            setTimeout(() => {
+                isSpinning = false;
+                showResult(foodList[winIndex]);
+            }, 4000);
+        });
+
+        // 4. 弹窗控制
+        function showResult(winner) {
+            resultImg.src = winner.image;
+            resultName.innerText = `决定就是你了：${winner.name}！`;
+            modal.style.display = 'flex';
+            // 延迟一点加 class 以触发 CSS 缓动动画
+            setTimeout(() => modal.classList.add('show'), 10);
+        }
+
+        closeBtn.addEventListener('click', () => {
+            modal.classList.remove('show');
+            setTimeout(() => {
+                modal.style.display = 'none';
+            }, 300); // 等待淡出动画结束
+        });
+    </script>
+</body>
+</html>
